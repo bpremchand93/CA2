@@ -4,10 +4,10 @@
 
 #Section 1:
 
-postcode_dataframe <- read.csv('NIPostcodes.csv', header = FALSE, stringsAsFactors = FALSE)
+postcode_dataframe <- read.csv('NIPostcodes.csv', header = FALSE, stringsAsFactors = FALSE, strip.white = TRUE)
 
 #Creating column name for each dataframe columns
-column_names <- c("Organization Name", "Sub-building Name", "Building Name", "Number", "Primary Thorfar", "Alt Thorfare", "Secondary Thorfare",
+column_names <- c("Organization Name", "Sub-building Name", "Building Name", "Number", "Primary Thorfare", "Alt Thorfare", "Secondary Thorfare",
                   "Locality", "Townland", "Town", "County", "Postcode", "x-coordinates", "y-coordinates", "Primary Key")
 
 
@@ -59,11 +59,11 @@ dir(root, pattern='csv$', recursive = TRUE, full.names = TRUE) %>%
   # bind all data frames into a single data frame
   rbind_all %>%
   # write into a single csv file
-  write.csv("all.csv",row.names = F)
+  write.csv("AllNICrimeData.csv",row.names = F)
 
 #Read all the crime dataset and  stringasfactor is set to false to avoid the 
-#default behaviour of R for converting char to factor 
-AllNICrimeData <- read.csv("all.csv", stringsAsFactors = FALSE)
+#default behaviour of R for converting character to factor 
+AllNICrimeData <- read.csv("ALLNICrimeData.csv", stringsAsFactors = FALSE)
 attach(AllNICrimeData)
 
 #Showing the count of crime dataset dataframe
@@ -77,40 +77,87 @@ AllNICrimeData$Crime.type <- as.factor(AllNICrimeData$Crime.type)
 head(AllNICrimeData , 10)
 str(AllNICrimeData)
 
-#Removing 'On or near' column from a location column and once it is modified added 'NA' in a empty values
+#Removing 'On or near' column from a location column and once it is modified added 'NA' in a empty columns
 AllNICrimeData$Location <- gsub("On or near", "", AllNICrimeData$Location)
 AllNICrimeData$Location[AllNICrimeData$Location==" "] <- NA
 AllNICrimeData <- na.omit(AllNICrimeData)
 
-#Random sample created from the crime dataset which consist of 1000 random records and location attribute should 
-#contains the 'NA'.
+#Random sample created from the crime dataset which consist of 1000 random records and modifed the location column to
+#uppercase for comparing with postcode dataframe.
 random_crime_sample <- AllNICrimeData[sample(1:nrow(AllNICrimeData), 1000, replace = FALSE),]
 random_crime_sample$Location <- toupper(random_crime_sample$Location)
+
+#trimws function used to remove the leading and trailing spaces
 random_crime_sample$Location <- trimws(random_crime_sample$Location, which = "both")
 
+#Selected the postcode dataframe should not contain 'NA' in 'Primary Thorfare' and postcode column.
+postcode_dataframe_distinct <- subset(postcode_dataframe, (!is.na(postcode_dataframe$`Primary Thorfare`) | !is.na(postcode_dataframe$Postcode)))
+postcode_dataframe_distinct <- select(postcode_dataframe_distinct, `Primary Thorfare`, Postcode)
 
-library(dplyr)
+#Modified the 'Primary Thorfare' column name as Location
+names(postcode_dataframe_distinct)[1] <- "Location"
+
+#sqldf library used to extract the distinct location and postcode details and the count of postcode details ordered
+#by count of postcode details in descending order using postcode dataframe.(This helps to get the location
+#and most occurance of postcode location.)
 library(sqldf)
-postcode_dataframe_unique <- tbl_df(postcode_dataframe)
-postcode_dataframe_unique <- subset(postcode_dataframe_unique,!is.na(postcode_dataframe_unique$Postcode))
-postcode_dataframe_unique <- subset(postcode_dataframe_unique,!is.na(postcode_dataframe_unique$`Primary Thorfar`))
-postcode_dataframe_unique <- sqldf(" SELECT *, COUNT(DISTINCT`Primary Thorfar`) as count, COUNT(Postcode) AS count_1
-                                   FROM postcode_dataframe_unique GROUP BY `Primary Thorfar`
-                                   HAVING count !=0
-                                   ORDER BY COUNT(Postcode) DESC")
+postcode_dataframe_distinct <- sqldf("SELECT Location, Postcode, COUNT(Postcode) AS Count_Postcode
+                                      FROM postcode_dataframe_distinct 
+                                      GROUP BY Location, Postcode
+                                      ORDER BY Count_Postcode DESC;")
 
-postcode_dataframe_unique <- select(postcode_dataframe_unique, `Primary Thorfar`, Postcode)
-postcode_dataframe_unique <- na.omit(postcode_dataframe_unique)
-names(postcode_dataframe_unique)[1] <- "Location"
+#The postcode distinct dataframe consist of duplicated location name and different postcodes.
+#To avoid this, selected only the distinct location(with the help of !duplicated function),
+#which consists of location column with most popular postcode for the particular location.
+postcode_dataframe_distinct <- postcode_dataframe_distinct[!duplicated(postcode_dataframe_distinct$Location),]
 
-#Function created to get the postcode for the crime location from the postcode dataframe that is created earlier.
-find_a_postcode <- function(loc){
-  random_crime_sample <- as.data.frame(fn$sqldf('SELECT a.*, b.Postcode FROM random_crime_sample a LEFT JOIN postcode_dataframe_unique b where a.Location = b."$loc"'))  
+#NA row has been removed from the postcode distinct dataframe.
+postcode_dataframe_distinct <- na.omit(postcode_dataframe_distinct)
+
+#Function created to get the postcode for the crime location from the postcode distinct dataframe that is created in the previous step.
+find_a_postcode <- function(df1, df2, loc){
+  random_crime_sample <- as.data.frame(fn$sqldf('SELECT a.*, b.Postcode FROM "$df1" a LEFT JOIN "$df2" b where a.Location = b."$loc" '))  
   return(random_crime_sample)
 }
 
-random_crime_sample <- find_a_postcode("Location")
+#Showing the structure of the random_crime_sample dataframe and showing the total number of rows.
+str(random_crime_sample)
+nrow(random_crime_sample)
 
+#Calling find_a_postcode function using input dataframe and location field name.
+random_crime_sample <- find_a_postcode("random_crime_sample", "postcode_dataframe_distinct", "Location")
+
+#'random_crime_sample' dataframe has been saved into 'random_crime_sample.csv'
 write.csv(random_crime_sample, "random_crime_sample.csv", row.names = F)
+
+
+# Extract the random_crime_sample dataframe to update_crime_sample dataframe and filtered the
+# postcode contains 'BT1' and then sorted the postcode and crime type.
+update_crime_sample <- random_crime_sample
+
+#dplyr library is used to filter the 'BT1' postcode from update_crime_sample dataframe.
+library(dplyr)
+chart_data <- filter(update_crime_sample, grepl('BT1',update_crime_sample$Postcode))
+
+#Order is used to sort the postcode and crime type in a ascending order by default.
+chart_data <- chart_data[order(chart_data$Postcode, chart_data$Crime.type),]
+
+#Showing the summary of the chart_data
+summary(chart_data)
+
+
+#colorRamppalette function used to fill colour for different crime types.
+#To plot the barplot frequency of crime_type has created using table function
+#barplot has been plotted using crime_type.freq and different crime types.
+#par function used to set the margin of the barplot
+#Different barplot attributes like main, xlab, ylab used to lable the suitable names
+
+pal <- colorRampPalette(c( "red", "yellow", "blue", "green"))
+crime_type.freq <- table(chart_data$Crime.type)
+par(mar=c(13.5,5, 3, 3))
+barplot(crime_type.freq[order(crime_type.freq,decreasing = T)], las=2, 
+        main= "Number of crime for each crime type", ylab = "Count of crime category", xlab = "Crime Categories", cex.lab=1,
+        ylim = c(0,100), border = NA,
+        cex.names=0.55,col=pal(14))
 
 
